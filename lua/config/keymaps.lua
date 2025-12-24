@@ -23,3 +23,8 @@ map("n", "H", "^", { desc = "移动到行首（第一个非空字符）" })
 -- macOS Cmd+/ 注释
 map("n", "<D-/>", "gcc", { remap = true, desc = "注释/取消注释（当前行）" })
 map("v", "<D-/>", "gc", { remap = true, desc = "注释/取消注释（选中区域）" })
+
+-- macOS Cmd+P 搜索文件 (相当于 leader fF)
+map("n", "<D-p>", function()
+  Snacks.picker.files()
+end, { desc = "搜索文件" })
