@@ -92,7 +92,7 @@ function M._open_sync()
   end)
 
   M.switch_history = bufs
-  M.selection = 2  -- 默认选中上一个
+  M.selection = 2 -- 默认选中上一个
   M.active = true
 
   M.buf_id = vim.api.nvim_create_buf(false, true)
@@ -160,7 +160,7 @@ function M.setup()
     M.ctrl_release_timer = vim.defer_fn(function()
       M.confirm_switch()
       M.ctrl_release_timer = nil
-    end, 400)
+    end, 300)
 
     return ""
   end, { expr = true, desc = "选中下一个 (松 Ctrl 切换)" })
