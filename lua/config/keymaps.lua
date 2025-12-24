@@ -28,3 +28,6 @@ map("v", "<D-/>", "gc", { remap = true, desc = "注释/取消注释（选中区�
 map("n", "<D-p>", function()
   Snacks.picker.files()
 end, { desc = "搜索文件" })
+
+-- macOS Cmd+S 保存文件
+map("n", "<D-s>", ":w<CR>", { desc = "保存文件" })
