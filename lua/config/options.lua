@@ -4,4 +4,6 @@
 
 -- 禁用保存时自动格式化
 vim.g.autoformat = false
+-- 不展示tab栏
+vim.opt.showtabline = 0
 
