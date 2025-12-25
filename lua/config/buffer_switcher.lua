@@ -160,7 +160,7 @@ function M.setup()
     M.ctrl_release_timer = vim.defer_fn(function()
       M.confirm_switch()
       M.ctrl_release_timer = nil
-    end, 300)
+    end, 400)
 
     return ""
   end, { expr = true, desc = "选中下一个 (松 Ctrl 切换)" })
