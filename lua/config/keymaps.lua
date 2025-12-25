@@ -29,5 +29,10 @@ map("n", "<D-p>", function()
   Snacks.picker.files()
 end, { desc = "搜索文件" })
 
+-- macOS Cmd+Shift+F 在 cwd 范围内搜索
+map("n", "<D-F>", function()
+  LazyVim.pick("live_grep", { root = false })()
+end, { desc = "Grep (cwd)" })
+
 -- macOS Cmd+S 保存文件
 map("n", "<D-s>", ":w<CR>", { desc = "保存文件" })
