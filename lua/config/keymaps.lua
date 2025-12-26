@@ -36,3 +36,9 @@ end, { desc = "Grep (cwd)" })
 
 -- macOS Cmd+S 保存文件
 map("n", "<D-s>", ":w<CR>", { desc = "保存文件" })
+
+-- macOS Cmd+I 主动触发补全建议
+map("i", "<D-i>", function()
+  require("blink.cmp").show()
+end, { desc = "触发补全" })
+
