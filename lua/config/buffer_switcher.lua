@@ -81,7 +81,7 @@ function M.render()
         padding = 1
       end
       local line = left .. string.rep(" ", padding) .. right
-      table.insert(lines, { line = line, bufnr = bufnr, name = name, prefix = prefix, suffix = suffix, display_path = display_path })
+      table.insert(lines, { line = line, bufnr = bufnr, name = name, prefix = prefix, suffix = suffix, display_path = display_path, padding = padding })
     end
   end
 
@@ -94,18 +94,18 @@ function M.render()
     local prefix_len = #item.prefix
     local name_len = #item.name
     local suffix_len = #item.suffix
-    local right_start = width - #item.display_path - 2
     local is_selected = (i == M.selection)
 
-    if is_selected then
-      vim.api.nvim_buf_add_highlight(M.buf_id, ns, "CursorLine", i - 1, 0, -1)
+    -- 先画路径高亮（确保不被 CursorLine 覆盖）
+    local right_start = prefix_len + name_len + suffix_len + item.padding
+    if right_start >= 0 then
+      vim.api.nvim_buf_add_highlight(M.buf_id, ns, "BufferSwitcherName", i - 1, right_start, -1)
     end
     -- 文件名用深色
     vim.api.nvim_buf_add_highlight(M.buf_id, ns, "BufferSwitcherName", i - 1, prefix_len, prefix_len + name_len + suffix_len)
-    -- 路径用灰色（确保 column 在有效范围内）
-    if right_start >= 0 then
-      -- 暂时统一用 BufferSwitcherName，路径和文件名同色
-      vim.api.nvim_buf_add_highlight(M.buf_id, ns, "BufferSwitcherName", i - 1, right_start, -1)
+    -- 最后画 CursorLine（覆盖整行背景）
+    if is_selected then
+      vim.api.nvim_buf_add_highlight(M.buf_id, ns, "CursorLine", i - 1, 0, -1)
     end
   end
 end
