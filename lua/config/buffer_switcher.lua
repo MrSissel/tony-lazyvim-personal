@@ -6,7 +6,8 @@ local M = {}
 M.win_id = nil
 M.buf_id = nil
 M.prev_buf = nil -- 追踪上一个访问的 buffer
-M.switch_history = {}
+M.buf_access_time = {} -- 追踪每个 buffer 的最后访问时间 {bufnr = timestamp}
+M.switch_history = {} -- 存储 {bufnr, path} 元组
 M.selection = 1
 M.active = false
 M.ctrl_release_timer = nil
@@ -18,13 +19,9 @@ vim.api.nvim_create_autocmd("BufEnter", {
   group = bufenter_augroup,
   pattern = "*",
   callback = function()
-    -- 只在 switcher 关闭且 prev_buf 无效时才更新（通过 switcher 切换会自己设置 prev_buf）
-    if not M.active then
-      local current_buf = vim.api.nvim_get_current_buf()
-      if not M.prev_buf or not vim.api.nvim_buf_is_valid(M.prev_buf) then
-        M.prev_buf = current_buf
-      end
-    end
+    -- 只记录 buffer 访问时间，prev_buf 只在 switcher 切换时更新
+    local bufnr = vim.api.nvim_get_current_buf()
+    M.buf_access_time[bufnr] = vim.loop.now()
   end,
 })
 
@@ -49,25 +46,68 @@ function M.render()
 
   local lines = {}
   local current_buf = vim.api.nvim_get_current_buf()
+  local width = vim.api.nvim_win_get_width(M.win_id)
 
-  for i, bufnr in ipairs(M.switch_history) do
+  -- 获取当前 buffer 的项目根目录
+  local root_dir = vim.fs.root(current_buf, { '.git', 'package.json', 'pyproject.toml', '.gitignore' }) or ""
+
+  -- 清除旧高亮
+  vim.api.nvim_buf_clear_namespace(M.buf_id, -1, 0, -1)
+  local ns = vim.api.nvim_create_namespace("buffer_switcher")
+
+  for i, entry in ipairs(M.switch_history) do
+    local bufnr, path = entry.bufnr, entry.path
     if vim.api.nvim_buf_is_valid(bufnr) then
-      local name = vim.api.nvim_buf_get_name(bufnr)
-      name = name == "" and "[无名称]" or vim.fs.basename(name)
+      local name = vim.fs.basename(path)
+      local display_path
+      if path == "" then
+        display_path = "[无名称]"
+      elseif root_dir ~= "" and path:find(root_dir, 1, true) == 1 then
+        -- 转换为相对于项目根目录的路径，只显示目录
+        local relative = path:sub(#root_dir + 2)
+        display_path = vim.fs.dirname(relative)
+      else
+        -- 如果不在项目根目录下，显示完整目录路径
+        display_path = vim.fs.dirname(path)
+      end
       local prefix = i == M.selection and "› " or "  "
       local suffix = bufnr == current_buf and " ◀" or ""
-      table.insert(lines, prefix .. name .. suffix)
+
+      -- 左侧文件名，右侧路径，中间空格填充对齐
+      local left = prefix .. name .. suffix
+      local right = display_path
+      local padding = width - #left - #right - 2
+      if padding < 1 then
+        padding = 1
+      end
+      local line = left .. string.rep(" ", padding) .. right
+      table.insert(lines, { line = line, bufnr = bufnr, name = name, prefix = prefix, suffix = suffix, display_path = display_path })
     end
   end
 
   vim.api.nvim_buf_set_option(M.buf_id, "modifiable", true)
-  vim.api.nvim_buf_set_lines(M.buf_id, 0, -1, false, lines)
+  vim.api.nvim_buf_set_lines(M.buf_id, 0, -1, false, vim.tbl_map(function(x) return x.line end, lines))
   vim.api.nvim_buf_set_option(M.buf_id, "modifiable", false)
 
-  -- 高亮当前选中行
-  vim.api.nvim_buf_clear_namespace(M.buf_id, -1, 0, -1)
-  local ns = vim.api.nvim_create_namespace("buffer_switcher")
-  vim.api.nvim_buf_add_highlight(M.buf_id, ns, "CursorLine", M.selection - 1, 0, -1)
+  -- 高亮（必须在 set_lines 之后执行）
+  for i, item in ipairs(lines) do
+    local prefix_len = #item.prefix
+    local name_len = #item.name
+    local suffix_len = #item.suffix
+    local right_start = width - #item.display_path - 2
+    local is_selected = (i == M.selection)
+
+    if is_selected then
+      vim.api.nvim_buf_add_highlight(M.buf_id, ns, "CursorLine", i - 1, 0, -1)
+    end
+    -- 文件名用深色
+    vim.api.nvim_buf_add_highlight(M.buf_id, ns, "BufferSwitcherName", i - 1, prefix_len, prefix_len + name_len + suffix_len)
+    -- 路径用灰色（确保 column 在有效范围内）
+    if right_start >= 0 then
+      -- 暂时统一用 BufferSwitcherName，路径和文件名同色
+      vim.api.nvim_buf_add_highlight(M.buf_id, ns, "BufferSwitcherName", i - 1, right_start, -1)
+    end
+  end
 end
 
 function M.is_editable_buffer(bufnr)
@@ -99,24 +139,21 @@ end
 
 function M._open_sync()
   local current_buf = vim.api.nvim_get_current_buf()
-
-  -- 保存 prev_buf（close() 后 BufEnter 可能会覆盖它）
-  local prev_buf = M.prev_buf
-
-  -- 如果 prev_buf 还没设置，设置为当前 buffer（第一次打开）
-  if not prev_buf then
-    prev_buf = current_buf
-  end
+  local current_path = vim.api.nvim_buf_get_name(current_buf)
 
   M.close()
 
-  -- 恢复 prev_buf（close() 后的 BufEnter 可能已经覆盖了）
-  M.prev_buf = prev_buf
+  -- switcher 打开时，当前文件永远是 prev_buf（排在第一位）
+  M.prev_buf = current_buf
 
-  -- 收集所有可编辑 buffer（除了当前）
-  local other_bufs = vim.tbl_filter(function(b)
-    return b ~= current_buf and M.is_editable_buffer(b)
-  end, vim.api.nvim_list_bufs())
+  -- 收集所有可编辑 buffer，存储为 {bufnr, path} 格式
+  local other_bufs = {}
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if bufnr ~= current_buf and M.is_editable_buffer(bufnr) then
+      local path = vim.api.nvim_buf_get_name(bufnr)
+      table.insert(other_bufs, { bufnr = bufnr, path = path })
+    end
+  end
 
   -- 检查是否有足够的可切换 buffer
   local switchable_count = #other_bufs + (M.is_editable_buffer(current_buf) and 1 or 0)
@@ -124,35 +161,46 @@ function M._open_sync()
     return
   end
 
-  -- 排序：上一个 buffer 优先，其余按 buffer 编号从小到大
+  -- 排序：上一个 buffer 优先，其余按访问时间从新到旧（MRU）
+  local prev_path = vim.api.nvim_buf_is_valid(M.prev_buf) and vim.api.nvim_buf_get_name(M.prev_buf) or ""
   table.sort(other_bufs, function(a, b)
-    if a == prev_buf then
+    if M.prev_buf and a.bufnr == M.prev_buf then
       return true
     end
-    if b == prev_buf then
+    if M.prev_buf and b.bufnr == M.prev_buf then
       return false
     end
-    return a < b
+    -- 按访问时间降序（时间戳大的在前面）
+    local time_a = M.buf_access_time[a.bufnr] or 0
+    local time_b = M.buf_access_time[b.bufnr] or 0
+    if time_a ~= time_b then
+      return time_a > time_b
+    end
+    -- 访问时间相同则按 buffer 编号
+    return a.bufnr < b.bufnr
   end)
 
   -- 构建 switch_history：最多 10 个
   M.switch_history = {}
   local current_is_editable = M.is_editable_buffer(current_buf)
   if current_is_editable then
-    table.insert(M.switch_history, current_buf)
+    table.insert(M.switch_history, { bufnr = current_buf, path = current_path })
   end
 
   -- 添加上一个 buffer
-  local has_prev = false
-  if prev_buf and prev_buf ~= current_buf and vim.api.nvim_buf_is_valid(prev_buf) and M.is_editable_buffer(prev_buf) then
-    table.insert(M.switch_history, prev_buf)
-    has_prev = true
+  if M.prev_buf and M.prev_buf ~= current_buf and vim.api.nvim_buf_is_valid(M.prev_buf) and M.is_editable_buffer(M.prev_buf) then
+    table.insert(M.switch_history, { bufnr = M.prev_buf, path = prev_path })
   end
 
-  -- 添加其他 buffer，限制最多 10 项
-  for _, buf in ipairs(other_bufs) do
-    if buf ~= prev_buf and #M.switch_history < 10 then
-      table.insert(M.switch_history, buf)
+  -- 添加其他 buffer，基于路径去重，限制最多 10 项
+  local seen_paths = {
+    [current_path] = true,
+    [prev_path] = true,
+  }
+  for _, entry in ipairs(other_bufs) do
+    if entry.bufnr ~= M.prev_buf and not seen_paths[entry.path] and #M.switch_history < 10 then
+      table.insert(M.switch_history, entry)
+      seen_paths[entry.path] = true
     end
   end
 
@@ -162,8 +210,9 @@ function M._open_sync()
 
   M.buf_id = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_option(M.buf_id, "filetype", "buffer-switcher")
+  vim.api.nvim_buf_set_option(M.buf_id, "syntax", "") -- 禁用语法高亮干扰
 
-  local width = 30
+  local width = 50 -- 加宽以显示完整路径
   local height = math.min(#M.switch_history, 10)
   local row = 1
   local col = math.max(0, math.floor((vim.o.columns - width) / 2))
@@ -216,18 +265,21 @@ function M.confirm_switch()
     return
   end
 
-  local current_buf = vim.api.nvim_get_current_buf()
-  local target_buf = M.switch_history[M.selection]
+  local entry = M.switch_history[M.selection]
+  local target_buf = entry and entry.bufnr
 
   if target_buf and vim.api.nvim_buf_is_valid(target_buf) then
-    -- 切换前，设置 prev_buf 为当前 buffer（作为"上一个"供下次使用）
-    M.prev_buf = current_buf
+    -- 切换后，prev_buf 设为刚切换到的 buffer
+    M.prev_buf = target_buf
     vim.api.nvim_set_current_buf(target_buf)
   end
   M.close()
 end
 
 function M.setup()
+  -- 定义高亮配色
+  vim.api.nvim_set_hl(0, "BufferSwitcherName", { fg = "#e4e4e4", bold = true })
+
   -- 按住 Ctrl + Tab 选中下一个，松 Ctrl 后切换
   vim.keymap.set({ "n", "i" }, "<C-Tab>", function()
     M.select_next()
